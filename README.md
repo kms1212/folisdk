@@ -60,6 +60,17 @@ Ensure standard GNU build utilities are installed:
 sudo apt-get install build-essential bison flex texinfo wget tar tcl help2man autoconf automake autoconf-archive pkg-config autopoint libssl-dev
 ```
 
+### FreeBSD Requirements
+
+Install the GNU build utilities from packages. The build runner prefers GNU m4
+as `gm4` and GNU make as `gmake` on FreeBSD, because `/usr/bin/m4` and
+`/usr/bin/make` are the BSD implementations and cannot build several vendored
+GNU packages.
+
+```sh
+sudo pkg install bash curl git gmake m4 bison flex texinfo wget tcl86 help2man autoconf automake autoconf-archive libtool pkgconf gettext-tools openssl
+```
+
 ## Building the SDK
 
 The SDK is built by the Python graph runner in `build.py`. It downloads and verifies upstream source archives, initializes missing submodules, prepares patched sources, builds host tools, then builds one graph per target architecture.

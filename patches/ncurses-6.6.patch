@@ -34,3 +34,12 @@ diff --color -ruN ncurses-src.orig/configure ncurses-src/configure
  fi
  
  	cross_compiling=$cf_save_crossed
+@@ -17090,7 +17090,7 @@
+ 			#! $SHELL
+ 			STRIPBIN="$with_strip_program" \\
+ 			STRIP="$with_strip_program" \\
+-			$INSTALL "$@"
++			$INSTALL "\$@"
+ 			CF_EOF
+ 			INSTALL="`pwd`/install.tmp"
+ 			chmod +x "$INSTALL"

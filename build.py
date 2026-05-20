@@ -37,6 +37,7 @@ from build_steps import (
 
 
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+FREEBSD_LOCAL_PATH = "/usr/local/bin:/usr/local/sbin"
 ANSI_RESET = "\x1b[0m"
 ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -48,7 +49,12 @@ class BuildCancelled(KeyboardInterrupt):
 
 
 def script_body(script: str) -> str:
-    return "set -xeuo pipefail\n" + textwrap.dedent(script).strip() + "\n"
+    return (
+        "set -xeuo pipefail\n"
+        "make() { \"$MAKE\" \"$@\"; }\n"
+        + textwrap.dedent(script).strip()
+        + "\n"
+    )
 
 
 def resolve_path(root: Path, value: str) -> Path:
@@ -619,7 +625,7 @@ class BuildContext:
         self.parallel = args.jobs or self.default_jobs()
         self.spare_slots = max(0, self.cpu_count - self.parallel)
         self.no_libs = args.no_libs
-        self.sed_type = "bsd" if self.osname == "Darwin" else "gnu"
+        self.sed_type = "bsd" if self.osname in {"Darwin", "FreeBSD", "OpenBSD", "NetBSD", "DragonFly"} else "gnu"
         self.rerun_step_selectors = tuple(selector.strip() for selector in (args.rerun_step or []) if selector.strip())
         self.rerun_job_keys: set[str] = set()
 
@@ -644,7 +650,8 @@ class BuildContext:
                 "SED_TYPE": self.sed_type,
                 "ARCH_LIST": ",".join(self.archs),
                 "M4": self.env["M4"],
-                "PATH": f"{self.pkg_prefix_join(self.host_prefix, 'bin')}:{SYSTEM_PATH}",
+                "MAKE": self.env["MAKE"],
+                "PATH": f"{self.pkg_prefix_join(self.host_prefix, 'bin')}:{self.system_path()}",
                 "CPPFLAGS": f"-I{self.pkg_prefix_join(self.host_prefix, 'include')}",
                 "LDFLAGS": f"-L{self.pkg_prefix_join(self.host_prefix, 'lib')}",
             }
@@ -809,6 +816,114 @@ class BuildContext:
             raise SystemExit(f"Required tool not found: {name}")
         return path
 
+    def system_path(self) -> str:
+        if self.osname == "FreeBSD":
+            return f"{SYSTEM_PATH}:{FREEBSD_LOCAL_PATH}"
+        return SYSTEM_PATH
+
+    def is_gnu_m4(self, path: str) -> bool:
+        try:
+            result = subprocess.run(
+                [path, "--version"],
+                cwd=str(self.root),
+                env=os.environ.copy(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return "gnu m4" in result.stdout.lower()
+
+    def require_gnu_m4(self) -> str:
+        candidates: list[str] = []
+        env_m4 = os.environ.get("M4")
+        if env_m4:
+            candidates.append(env_m4)
+
+        if self.osname == "Darwin":
+            candidates.extend(
+                [
+                    "/opt/homebrew/opt/m4/bin/m4",
+                    "/usr/local/opt/m4/bin/m4",
+                    "gm4",
+                    "m4",
+                ]
+            )
+        elif self.osname == "FreeBSD":
+            candidates.extend(
+                [
+                    "gm4",
+                    "/usr/local/bin/gm4",
+                    "m4",
+                ]
+            )
+        else:
+            candidates.extend(["m4", "gm4"])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            path = shutil.which(candidate)
+            if path and self.is_gnu_m4(path):
+                return path
+
+        raise SystemExit(
+            "Required GNU m4 1.4 or later not found. Install GNU m4 "
+            "(FreeBSD: pkg install m4; macOS: brew install m4) or set M4=/path/to/gm4."
+        )
+
+    def is_gnu_make(self, path: str) -> bool:
+        try:
+            result = subprocess.run(
+                [path, "--version"],
+                cwd=str(self.root),
+                env=os.environ.copy(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return "gnu make" in result.stdout.lower()
+
+    def require_gnu_make(self) -> str:
+        candidates: list[str] = []
+        env_make = os.environ.get("MAKE")
+        if env_make:
+            candidates.append(env_make)
+
+        if self.osname == "FreeBSD":
+            candidates.extend(
+                [
+                    "gmake",
+                    "/usr/local/bin/gmake",
+                    "make",
+                ]
+            )
+        else:
+            candidates.extend(["make", "gmake"])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            path = shutil.which(candidate)
+            if path and self.is_gnu_make(path):
+                return path
+
+        raise SystemExit(
+            "Required GNU make not found. Install GNU make "
+            "(FreeBSD: pkg install gmake) or set MAKE=/path/to/gmake."
+        )
+
     def pkg_prefix_text(self, prefix: str) -> str:
         # Preserve the shell-style "$PKGBUILDDIR/$PREFIX" spelling used by build.sh.
         # Some generated libtool scripts compare compiler paths textually.
@@ -825,7 +940,8 @@ class BuildContext:
         if self.osname == "Darwin":
             env = {
                 "TCLSH": "/opt/homebrew/opt/tcl-tk/bin/tclsh",
-                "M4": "/opt/homebrew/opt/m4/bin/m4",
+                "M4": self.require_gnu_m4(),
+                "MAKE": self.require_gnu_make(),
                 "ACLOCAL_1_15_HOST": str(automake115_bin / "aclocal"),
                 "AUTOMAKE_1_15_HOST": str(automake115_bin / "automake"),
                 "AUTOCONF_2_69_HOST": str(autoconf269_bin / "autoconf"),
@@ -834,7 +950,8 @@ class BuildContext:
         else:
             env = {
                 "TCLSH": self.require_tool("tclsh"),
-                "M4": self.require_tool("m4"),
+                "M4": self.require_gnu_m4(),
+                "MAKE": self.require_gnu_make(),
                 "ACLOCAL_1_15_HOST": str(automake115_bin / "aclocal"),
                 "AUTOMAKE_1_15_HOST": str(automake115_bin / "automake"),
                 "AUTOCONF_2_69_HOST": str(autoconf269_bin / "autoconf"),

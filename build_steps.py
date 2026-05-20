@@ -598,16 +598,17 @@ def create_global_prepare_graph(ctx: "BuildContext") -> StepGraph:
                 cwd=lambda run_ctx: run_ctx.build_subdir("autoconf-269"),
                 env=_context_env,
                 configure_script="""
+                M4="$M4" \
                 ../autoconf269-src/configure \
                     --prefix="$BUILDDIR/autoconf-269"
                 """,
                 build_script="""
-                make -j"$PARALLEL"
+                make -j"$PARALLEL" M4="$M4"
                 # The build directory itself is the configured prefix, so the
                 # generated bin scripts are already in place. GNU install
                 # errors out on self-copies here, while install-data still
                 # populates the shared data files we actually need.
-                make install-data
+                make install-data M4="$M4"
                 """,
             ),
             package_step(
@@ -617,15 +618,16 @@ def create_global_prepare_graph(ctx: "BuildContext") -> StepGraph:
                 cwd=lambda run_ctx: run_ctx.build_subdir("automake-115"),
                 env=_context_env,
                 configure_script="""
+                M4="$M4" \
                 ../automake115-src/configure \
                     --prefix="$BUILDDIR/automake-115"
                 """,
                 build_script="""
-                make -j"$PARALLEL"
+                make -j"$PARALLEL" M4="$M4"
                 # Same-prefix builds already have the generated executables in
                 # bin/, so only install the data payload to avoid self-copy
                 # failures from GNU install on Linux.
-                make install-data
+                make install-data M4="$M4"
                 """,
             ),
             ScriptStep(
@@ -1002,7 +1004,7 @@ def create_host_graph(ctx: "BuildContext") -> StepGraph:
             cwd=lambda run_ctx: run_ctx.build_subdir("ncurses"),
             env=_context_env,
             configure_script="""
-            CC=gcc \
+            CC="${HOST_CC:-cc}" \
             CFLAGS="-O2 -Wno-implicit-int -Wno-return-type" \
             ../ncurses-src/configure \
                 --without-shared \
@@ -1757,6 +1759,7 @@ def create_arch_graph(ctx: "BuildContext", state: ArchBuildState, include_target
                     --with-strip-program="$STRIP" \
                     --with-tic-path="$TIC" \
                     --with-build-cc="/usr/bin/cc" \
+                    --with-build-cflags="-std=gnu99" \
                     --without-ada \
                     --disable-mixed-case \
                     --disable-db-install \
@@ -1773,6 +1776,11 @@ def create_arch_graph(ctx: "BuildContext", state: ArchBuildState, include_target
                 """,
                 build_script="""
                 make -j"$PARALLEL" ARFLAGS="" RANLIB="true" LIBTOOL="$LIBTOOL"
+                if [ "$SED_TYPE" = "bsd" ]; then
+                    find lib -type f -name "*.la" -exec sed -i '' "s|^relink_command=.*|relink_command=''|" {} +
+                else
+                    find lib -type f -name "*.la" -exec sed -i "s|^relink_command=.*|relink_command=''|" {} +
+                fi
                 make install DESTDIR="$PKGBUILDDIR/$SYSROOT"
                 ln -sf libncursesw.dl "$PKGBUILDDIR/$SYSROOT/usr/lib/libncurses.dl"
                 """,
